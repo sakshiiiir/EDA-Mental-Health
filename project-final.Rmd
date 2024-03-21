@@ -1,0 +1,731 @@
+---
+title: "Anxiety Disorder"
+output: html_document
+---
+
+S670
+Fall 2023
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(reshape2)
+library(MASS)
+library(mgcv)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73",
+ "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+
+Dataset link: https://www.kaggle.com/datasets/amirhoseinmousavian/mental-health
+
+Factors affecting mental health:
+  1. GDP
+  2. Age
+  3. Gender
+  4. Treatment distribution
+
+
+```{r}
+# Loading the datasets
+#setwd("C:/Users/Acer/Desktop/R markdown")
+gdp_df <- read_csv('data/anxiety-disorders-prevalence-vs-gdp.csv' , show_col_types = FALSE)
+income_class <- read_csv('data/income_classification.csv', show_col_types = FALSE)
+
+
+age_df <- read.csv("data/anxiety-disorders-prevalence-by-age.csv", sep= ,)
+country <- read_xlsx("data/countries_and_classification.xlsx")
+
+
+gender_df <- read.csv("data/anxiety-disorders-prevalence-males-vs-females.csv")
+```
+
+
+```{r}
+#filtering data from year 1990 to 2019.
+gdp_df <- subset(gdp_df, Year >= 1990 & Year <= 2019)
+age_df <- subset(age_df, Year >= 1990 & Year <= 2019)
+gender_df <- subset(gender_df, Year >= 1990 & Year <= 2019)
+```
+
+```{r}
+#cleaning the gdp df
+gdp_df <-
+  rename(gdp_df, 
+    "Anxiety_disorders" = "Anxiety disorders (share of population) - Sex: Both - Age: Age-standardized",
+    "GDP_per_capita" = "GDP per capita, PPP (constant 2017 international $)",
+    "Population" = "Population (historical estimates)"
+  )
+
+# There are lot of unfilled rows in the code column.fill that up
+unique_entity_codes_continents <- unique(gdp_df[, c("Entity", "Code", "Continent")])
+cleaned_entity_codes_continents <- na.omit(unique_entity_codes_continents)
+
+```
+
+```{r}
+cleaned_entity_codes_continents
+```
+
+
+```{r}
+#clean the age df
+age_df$Anxiety.disorders..share.of.population....Sex..Both...Age..All.ages <- NULL
+age_df$Anxiety.disorders..share.of.population....Sex..Both...Age..Age.standardized <- NULL
+```
+
+```{r}
+#rename columns
+age_df <- age_df %>%
+  rename(
+    `Age_05-14` = `Anxiety.disorders..share.of.population....Sex..Both...Age..5.14.years`,
+    `Age_15-19` = `Anxiety.disorders..share.of.population....Sex..Both...Age..15.19.years`,
+    `Age_20-24` = `Anxiety.disorders..share.of.population....Sex..Both...Age..20.24.years`,
+    `Age_25-29` = `Anxiety.disorders..share.of.population....Sex..Both...Age..25.29.years`,
+    `Age_30-34` = `Anxiety.disorders..share.of.population....Sex..Both...Age..30.34.years`,
+    `Age_35-39` = `Anxiety.disorders..share.of.population....Sex..Both...Age..35.39.years`,
+    `Age_40-44` = `Anxiety.disorders..share.of.population....Sex..Both...Age..40.44.years`,
+    `Age_45-49` = `Anxiety.disorders..share.of.population....Sex..Both...Age..45.49.years`,
+    `Age_50-54` = `Anxiety.disorders..share.of.population....Sex..Both...Age..50.54.years`,
+    `Age_55-59` = `Anxiety.disorders..share.of.population....Sex..Both...Age..55.59.years`,
+    `Age_60-64` = `Anxiety.disorders..share.of.population....Sex..Both...Age..60.64.years`,
+    `Age_65-69` = `Anxiety.disorders..share.of.population....Sex..Both...Age..65.69.years`,
+    `Age_70+` = `Anxiety.disorders..share.of.population....Sex..Both...Age..70..years`
+  )
+```
+
+```{r}
+#making new age categories
+age_df$Age_05_19 <- rowMeans(age_df[, c('Age_05-14', 'Age_15-19')], na.rm = TRUE)
+age_df$Age_20_39 <- rowMeans(age_df[, c('Age_20-24','Age_25-29', 'Age_30-34', 'Age_35-39' )], na.rm = TRUE)
+age_df$Age_40_59 <- rowMeans(age_df[, c('Age_40-44','Age_45-49','Age_50-54','Age_55-59')], na.rm = TRUE)
+age_df$Age_60_ <- rowMeans(age_df[, c('Age_60-64', 'Age_65-69', 'Age_70+')], na.rm = TRUE)
+```
+
+
+```{r}
+#creating a new df with the new categories
+age_df <- dplyr::select(age_df, -"Age_05-14",-"Age_15-19",-"Age_20-24",-"Age_25-29", -"Age_30-34", -"Age_35-39", -"Age_40-44", -"Age_45-49", -"Age_50-54", -"Age_55-59", -"Age_60-64", -"Age_65-69",-"Age_70+")
+
+```
+
+
+```{r}
+#gender dataframe
+gender_df <-
+  rename(gender_df, 
+    "Male_anxiety" = "Anxiety.disorders..share.of.population....Sex..Male...Age..All.ages",
+    "Female_anxiety" = "Anxiety.disorders..share.of.population....Sex..Female...Age..Age.standardized",
+    "Population" = "Population..historical.estimates."
+  )
+```
+
+
+```{r}
+#combine the income calssification with the gdp df
+countries_df <- country[, c("Code", "Classification")]
+gdp_merged <- merge(gdp_df, countries_df, by = "Code")
+#Filtering the datasets as required for modelling
+gdp_new <- dplyr::select(gdp_merged, -Continent, -Code)
+gdp_new <- na.omit(gdp_new)
+```
+
+```{r}
+#combine the gender df with the income classification
+gender_new <- dplyr::select(gender_df, -Continent, -Code, -Population)
+gender_new <- gender_new[complete.cases(gender_new$Male_anxiety, gender_new$Female_anxiety), ]
+```
+
+merge the data of gdp and age
+```{r}
+merged_1 <- merge(gdp_new, age_df, by = c("Entity", "Year"))
+```
+
+merge gender df and gdp and age
+```{r}
+merge_2 <- merge(merged_1, gender_new, by= c("Entity", "Year"))
+```
+
+create a correlation matrix
+```{r}
+numeric_data <- merge_2[sapply(merge_2, is.numeric)]
+
+#calculate the correlation matrix
+cor_matrix <- cor(numeric_data)
+
+#melt the correlation matrix into a long format
+cor_melted <- reshape2::melt(cor_matrix)
+
+
+ggplot(cor_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2() +
+  theme_minimal() +
+  labs(title = "Correlation of factors with Anxiety Disorder") + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 10, hjust = 1)) +
+  coord_fixed()
+```
+
+
+>1.GDP
+
+```{r}
+gdp_yearlyMean <- gdp_df %>%
+  filter(!Entity %in% c("World", "Upper-middle-income countries", "High-income countries", "Low-income countries","Lower-middle-income countries", "Middle-income countries")) %>%
+  group_by(Year) %>%
+  summarise(Mean_anxiety = mean(Anxiety_disorders, na.rm = TRUE))
+```
+
+plot of anxiety over time
+```{r}
+ggplot(gdp_yearlyMean, aes(x = Year, y = Mean_anxiety)) +
+  geom_line(color = "forestgreen") +
+  labs(title = "Anxiety Disorder over Time" , y = "Mean Anxiety Disorder")+
+  theme_minimal()
+```
+
+
+GDP vs Anxiety Disorder (1990-2019)
+
+```{r, warning = FALSE}
+gdp_2 <- gdp_df %>%
+  filter(!Entity %in% c("World", "Upper-middle-income countries", "High-income countries", "Low-income countries","Lower-middle-income countries", "Middle-income countries")) %>%
+  group_by(Entity) %>%
+  summarise(Mean_anxiety = mean(Anxiety_disorders, na.rm = TRUE), Mean_gdp = mean(GDP_per_capita, na.rm = TRUE), Mean_pop = mean(Population, na.rm = TRUE) )
+gdp_2 <- na.omit(gdp_2)
+
+# Create breaks for Mean_pop
+mean_pop_breaks <- c(5.00e+08, 7.50e+08, 1.00e+09, 1.25e+09)
+
+# Create labels for the breaks
+mean_pop_labels <- c("500 million", "750 million", "1 billion", "1.25 billion")
+
+# Plot using ggplot2
+ggplot(gdp_2, aes(x = Mean_gdp, y = Mean_anxiety)) +
+  geom_point(aes(size = Mean_pop), alpha = 0.75) +
+  geom_smooth(method = "loess", se = FALSE, color = "orange") +  # unweighted
+  geom_smooth(method = "loess", aes(weight = Mean_pop), se = FALSE) +
+  labs(title = "GDP Vs Anxiety Disorder", 
+       x = "GDP per capita (Mean over all years)",
+       y = "Anxiety Disorder (Share of population)", 
+       subtitle = "For all countries") +
+  scale_size(name = "Population",
+                        breaks = mean_pop_breaks,
+                        labels = mean_pop_labels)+
+  theme_minimal()
+```
+
+
+1990 & 2019 GDP vs Anxiety Disorder
+
+```{r, warning = FALSE}
+gdp_df |>
+  filter(Year == 2019, !Entity %in% c("World", "Upper-middle-income countries", "High-income countries", "Low-income countries","Lower-middle-income countries", "Middle-income countries")) |>
+  ggplot(aes(x = log(GDP_per_capita), y = Anxiety_disorders)) +
+  geom_point() +
+  geom_smooth(method = "loess" ) +
+  labs(title = "GDP Vs Anxiety Disorder for 2019" , y = "Anxiety Disorder (Share of population)", x= "log (GDP per capita)")+
+  theme_minimal()
+```
+
+
+```{r, warning = FALSE}
+gdp_df |>
+  filter(Year == 1990, !Entity %in% c("World", "Upper-middle-income countries", "High-income countries", "Low-income countries","Lower-middle-income countries", "Middle-income countries")) |>
+  ggplot(aes(x = log(GDP_per_capita), y = Anxiety_disorders)) +
+  geom_point() +
+  geom_smooth(method = "loess" ) +
+  labs(title = "GDP Vs Anxiety Disorder for 1990" , y = "Anxiety Disorder (Share of population)", x= "log (GDP per capita)" )+
+  theme_minimal()
+```
+
+By observing the 1990 and 2019 trends of log GDP vs the Anxiety disorder, the trend seems that with increase in gdp , there is increase in anxiety. But the data points are way too scattered. So, let's consider other factors like population, income of a country, gender , age.
+
+
+2019 log Population vs Anxiety Disorder.
+
+```{r, warning = FALSE}
+gdp_df |>
+  filter(Year == 2019, !Entity %in% c("World", "Upper-middle-income countries", "High-income countries", "Low-income countries","Lower-middle-income countries", "Middle-income countries")) |>
+  ggplot(aes(x = log(Population), y = Anxiety_disorders)) +
+  geom_point() +
+  geom_smooth(method = "loess" ) +
+  labs(title = "Population Vs Anxiety Disorder for 2019" , y = "Anxiety Disorder (Share of population)")+
+  theme_minimal()
+```
+2019 log Population vs Anxiety Disorder.
+
+```{r, warning = FALSE}
+gdp_df |>
+  filter(Year == 1990, !Entity %in% c("World", "Upper-middle-income countries", "High-income countries", "Low-income countries","Lower-middle-income countries", "Middle-income countries")) |>
+  ggplot(aes(x = log(Population), y = Anxiety_disorders)) +
+  geom_point() +
+  geom_smooth(method = "loess" ) +
+  labs(title = "Population Vs Anxiety Disorder for 1990" , y = "Anxiety Disorder (Share of population)")+
+  theme_minimal()
+```
+
+log population does not seem to have a major effect on the anxiety levels.
+
+cleaning the gdp df
+```{r}
+merged_data <- merge(gdp_df, cleaned_entity_codes_continents, by = "Entity", all.x = TRUE)
+
+#check duplicate columns
+merged_data$Code <- ifelse(is.na(merged_data$Code.x), merged_data$Code.y, merged_data$Code.x)
+merged_data$Continent <- ifelse(is.na(merged_data$Continent.x), merged_data$Continent.y, merged_data$Continent.x)
+
+#drop unecessary columns
+merged_data$Code.x <- NULL
+merged_data$Code.y <- NULL
+merged_data$Continent.x <- NULL
+merged_data$Continent.y <- NULL
+
+```
+
+merging the income classification
+```{r}
+#merging based on the 'Code' column
+final_data <- merge(merged_data, income_class, by = "Code", all.x = TRUE)
+final_data <- na.omit(final_data)
+```
+
+```{r}
+#count the number of rows for each entity
+entity_counts <- table(final_data$Entity)
+
+#filter entities with exactly 30 years of data
+complete_data_entities <- names(entity_counts[entity_counts == 30])
+
+num_complete_data_entities <- length(complete_data_entities)
+print(num_complete_data_entities)
+
+```
+We have the data of about 157 countries when we combine the income classification with the original data.
+
+```{r}
+#filter final_data to include only entities with complete data
+final_data_complete_years <- final_data[final_data$Entity %in% complete_data_entities, ]
+```
+
+```{r}
+final_data_complete_years$Entity <- NULL
+```
+
+```{r}
+#unique combinations of Country and Income Classification
+unique_countries_classifications <- unique(final_data_complete_years[, c("Code", "Classification")])
+
+#number of unique countries for each income classification
+unique_income_classification_counts <- table(unique_countries_classifications$Classification)
+
+#counts
+print(unique_income_classification_counts)
+```
+
+filter out some countries (8) from the main dataframe
+
+```{r}
+countries <- c("United States", "Spain", "China", "Argentina", "India", "Bhutan", "Madagascar", "Ethiopia")
+final_data_complete_years <- final_data_complete_years |> filter(Country %in% countries)
+```
+
+```{r}
+income_unique <- unique(final_data_complete_years[,c("Country", "Classification")])
+custom_order <- c("High income", "Upper middle income", "Lower middle income", "Low income")
+income_unique$Classification <- factor(income_unique$Classification, levels = custom_order)
+income_unique <- income_unique[order(income_unique$Classification), ]
+
+print(income_unique)
+
+```
+
+anxiety disorder over years
+
+```{r warning = FALSE}
+final_data_complete_years$Classification <- factor(final_data_complete_years$Classification, levels = c("High income", "Upper middle income", "Lower middle income","Low income"))
+
+ggplot(final_data_complete_years, aes(x= Year, y = Anxiety_disorders, color = Country)) +
+  geom_line(size = 0.6)+
+  facet_wrap(~ Classification)+
+  theme(panel.spacing = unit(1, "cm", data = NULL)) + 
+  scale_color_manual(values = cb_palette) +
+  labs(title = "Anxiety Disorder for countries classified based on income" , subtitle = "1990-2019", y = "Anxiety Disorder (Share of population)")
+```
+
+
+- High income and upper middle income categories has a higher anxiety level as compared to lower-middle income and low income.
+
+- In the high income category, US(high population) has a higher anxiety disorder levels as compared to Spain (low population). Higher population with high incomes contributes to high anxiety levels.
+
+- Whereas for the rest 3 categories, out of two countries, country with the lower population has a higher anxiety when compared to their counterpart country of higher population.
+
+
+Anxiety vs log (GDP)
+```{r}
+ggplot(final_data_complete_years, aes(x= log(GDP_per_capita), y = Anxiety_disorders, color = Classification)) +
+  geom_smooth(method = "loess", span = 1.0)+
+  facet_wrap(~ Classification, scales = "free")+
+  theme(panel.spacing = unit(1, "cm", data = NULL)) + 
+  scale_color_manual(values = cb_palette) +
+  labs(title = "Anxiety Disorder vs log(GDP) for countries" , subtitle = "1990-2019", y = "Anxiety Disorder (Share of population)",
+       x = "log(GDP)", color ="Income Classification")+
+  theme_minimal()
+```
+For the middle income countries we see that with increase in log gdp, anxiety increases, whereas the high income sees an unsual dip for very high gdp.
+
+>2. AGE
+
+```{r}
+age_df_long <- age_df %>% 
+  pivot_longer(
+    cols = starts_with("Age"), 
+    names_to = "age",
+    values_to = "prevalence"
+  )
+```
+
+```{r, warning = FALSE}
+age_df_final <- country %>% left_join( age_df_long, by=c('Code'))
+```
+
+```{r}
+age_df_final$Classification <- factor(age_df_final$Classification, levels = c("High income", "Upper middle income", "Lower middle income","Low income"))
+```
+
+```{r}
+countries <- c("United States", "Spain", "China", "Argentina", "India", "Bhutan", "Madagascar", "Ethiopia")
+
+age_df_final |>
+  filter(Country %in% countries) |>
+  
+  ggplot(aes(x = Year.y, y = prevalence, color = age)) +
+  geom_smooth() +
+  facet_wrap(~ Classification)+ 
+  scale_color_manual(values = c( "#56B4E9", "#F0E442","#009E73","#E69F00" )) +
+  theme(panel.spacing = unit(1, "cm", data = NULL)) + 
+  labs(title = "Anxiety Disorder Prevalence by Age in High-Prevalence Countries",
+       subtitle = "1990-2019" , 
+       x = "Year",
+       y = "Anxiety Disorder (Share of population)")
+```
+
+- For the high income, all the age categories have pretty high anxiety levels, the working population have a even higher anxiety level. 
+
+- For the upper middle income countries, the anxiety levels are pretty similar to high income category. Here, all the age categories have similar anxiety levels.
+
+- For the lower middle and low income countries, the anxiety levels are significantly lower with the working population having higher anxiety. Surprisingly, the older population also has a comparable anxiety level.
+
+Overall, the working population is most affected by anxiety.
+
+
+>3. GENDER
+
+```{r, warning = FALSE}
+countries_df <- country[, c("Code", "Classification")]
+gender_merged <- merge(gender_df, countries_df, by = "Code")
+```
+
+```{r}
+#filtering the dataset by taking only the required countries under consideration
+countries <- c("United States", "Spain", "China", "Argentina", "India", "Bhutan", "Madagascar", "Ethiopia")
+gender_filter <- gender_merged[gender_merged$Entity %in% countries, ]
+
+gender_filter <- subset(gender_filter, Year> 1989 & Year<2020)
+gender_filter<- distinct(gender_filter)
+```
+
+```{r, warning = FALSE}
+gender_df |> 
+  filter(Year == c(2019, 1990), Entity!= c("World", "Upper-middle-income countries", "High-income countries", "Low-income countries","Lower-middle-income countries", "Middle-income countries")) |>
+  ggplot(aes(x = Male_anxiety, y = Female_anxiety)) +
+  geom_point() + 
+  geom_smooth()+
+  facet_wrap(~Year, scale = "free")+
+  labs(title = "Anxiety Disorder Male vs Female", subtitle = "1990-2019" , 
+       x = "Male Anxiety Disorder (Share of Population)",
+       y = "Female Anxiety Disorder (Share of Population)")+
+  theme_minimal()
+```
+
+We can observe that the anxiety is much more higher in females as compared to males. The slope of the curve greater than 1.
+
+
+```{r, warning = FALSE}
+#calculating mean share of population for each country (grouping by countries)
+mean_values_g <- gender_filter %>%
+  group_by(Entity, Classification) %>%
+  summarise(Mean_Male = mean(Male_anxiety, na.rm = TRUE), Mean_Female = mean(Female_anxiety, na.rm = TRUE))
+```
+mean anxiety over the 3 decades for countries
+```{r}
+# Reshaping the data to long format
+melted_data <- mean_values_g %>%
+  gather(key = "Gender", value = "Mean_Value", -Entity, -Classification)
+
+# Define the desired order for the "Classification" levels
+classification_order <- c("High income", "Upper middle income", "Lower middle income", "Low income")
+
+melted_data$Classification <- factor(melted_data$Classification, levels = c("High income", "Upper middle income", "Lower middle income","Low income"))
+
+# Convert "Classification" to a factor with the desired order within the ggplot aes mapping
+ggplot(melted_data, aes(y = interaction(Entity, Classification), x = Mean_Value, fill = Gender, order = reorder(Classification, -match(Classification, classification_order)))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  labs(title = "Mean Anxiety Disorder by Gender and Country", subtitle = "1990 - 2019",
+       y = "Country",
+       x = "Anxiety Disorder (Share of population)") +
+  scale_fill_manual(values = c("Mean_Male" =  "skyblue", "Mean_Female" =  "lightpink"),
+                    labels = c("Mean_Female" = "Female", "Mean_Male" = "Male")) +
+  theme_minimal()+
+  scale_x_continuous(breaks = seq(0, 7, by = 1))
+
+```
+
+
+- Considering mean of anxiety for the years 1990-2019, for all the categories of countries based on income, we observe that the anxiety disorder levels are significantly higher in females as compared to males.
+
+
+```{r, warning = FALSE}
+# For both males and females
+
+# Create a new dataframe combining male and female data
+combined_data <- rbind(
+  transform(gender_filter, Gender = "Male", Anxiety_Value = Male_anxiety),
+  transform(gender_filter, Gender = "Female", Anxiety_Value = Female_anxiety)
+)
+
+# Plot for males and females on the same graph
+ggplot(combined_data, aes(x = Year, y = Anxiety_Value, color = Entity, linetype = Gender)) +
+  geom_line(size = 0.6) + 
+  #facet_wrap(~Entity, scales = "free") +
+  labs(title = "Anxiety Disorder Prevalence by Gender",
+       subtitle = "1990-2019" , 
+       x = "Year",
+       y = "Anxiety Disorder (Share of Population)") +
+  scale_color_manual(values = cb_palette) +
+  theme(panel.spacing = unit(1, "cm", data = NULL)) +  
+  scale_linetype_manual(values = c("Male" = "solid", "Female" = "dashed"))+
+  facet_wrap(~Classification)
+```
+
+Females higher than males.
+
+
+>4. Treatment of anxiety disorder. 
+
+- We have the percent of the population of a country for which out of the population with anxiety disorder how many had potential adequate treatment, other treatments and were left untreated.
+
+- Plot these stats for countries differentiated by income.
+
+```{r}
+setwd("C:/Users/Acer/Desktop/R markdown")
+treatment.df <- read.csv('data/anxiety-disorders-treatment-gap.csv')
+```
+
+```{r}
+#plot for high income -countries and lower-middle income, and upper middle income countries
+
+treatment.df |>
+  
+  filter(Entity %in% c('High-income countries', 'Upper-middle-income countries' , 'Lower-middle-income countries')) |>
+  
+  pivot_longer(
+    cols = c("Potentially.adequate.treatment..conditional", "Other.treatments..conditional", "Untreated..conditional"),
+    names_to = "treatment",
+    values_to = "percent"
+  ) |>
+  
+  ggplot(aes(y = percent, x = Entity , fill = treatment))  + 
+  geom_bar(stat = "identity", width = 0.5) +
+  labs(title = 'Anxiety Disorder Treatment Distribution' , 
+       subtitle = '2017' , y = "% Population with anxiety") + 
+  scale_color_manual(values = cb_palette) + 
+  theme(axis.text.x = element_text(angle = 5, hjust = 1)) 
+```
+
+
+Across all the categories,we can see that the majority of the population is untreated, this is a great cause of concern.
+For the high income countries, the share of population receiving treatments is higher as compared to other middle-low income countries. (it has better facilities).
+
+
+
+>5. Age when first had anxiety depression.
+
+```{r}
+setwd("C:/Users/Acer/Desktop/R markdown")
+first.df <- read.csv('data/age-when-first-had-anxiety-depression.csv')
+```
+
+
+```{r}
+#colnames(first.df)
+first.df <- rename( first.df , 
+    "Age 0-13" = Share...Question..mh7b_2...Age.range.when.first.felt.anxious.depressed...Answer..Ages..13...Gender..all...Age_group..all, 
+    "Age 13-19" = Share...Question..mh7b_2...Age.range.when.first.felt.anxious.depressed...Answer..Ages.13.19...Gender..all...Age_group..all , 
+    "Age 20-29" = Share...Question..mh7b_2...Age.range.when.first.felt.anxious.depressed...Answer..Ages.20.29...Gender..all...Age_group..all , 
+    "Age 30-39" = Share...Question..mh7b_2...Age.range.when.first.felt.anxious.depressed...Answer..Ages.30.39...Gender..all...Age_group..all , 
+    "Age>40" = Share...Question..mh7b_2...Age.range.when.first.felt.anxious.depressed...Answer..Ages..40...Gender..all...Age_group..all ,
+    "Refused to tell" = Share...Question..mh7b_2...Age.range.when.first.felt.anxious.depressed...Answer..Don.t.know.Refused...Gender..all...Age_group..all
+  )
+```
+
+```{r}
+#converting to longer format
+df_long <- pivot_longer(first.df , 
+                      cols = c("Age 0-13" , "Age 13-19", "Age 20-29" , "Age 30-39" , "Age>40",                      "Refused to tell"), 
+                      names_to = "Age_Group",
+                      values_to = "Percent")
+```
+
+
+```{r}
+#rectangular distribution
+ggplot(df_long, aes( x = Age_Group , y = Entity, fill = Percent)) +
+  geom_tile() +
+  labs(title="Age when first had Anxiety Depression", subtitle = 'Percent of population year 2020 across different continents' , x = "Age Group", y = "Continent") +
+  scale_fill_viridis_c(direction = -1) +
+  theme_minimal()
+```
+
+A major chunk of population refuses to tell when they first experienced anxiety. Across the teenage years, high income countries have a high percent of population first experiencing anxiety, As we progress towards 20-29 age group Lower middle income countries, Europe, Asia , Africa see a significant rise too. We can say that the major chunk of population first experiences anxiety before the age of 30, although many people have refused to reveal the age.
+
+
+###Fitting a Model
+```{r}
+model_lo <- gam(Anxiety_disorders ~ s(log(GDP_per_capita)) + Year ,weights = Population, data = merge_2 )
+
+#summary of the model
+summary(model_lo)
+
+#predictions using the model
+predictions <- predict(model_lo, newdata = merge_2)
+
+#nse
+mse <- mean((predictions - merge_2$Anxiety_disorders)^2)
+cat("Mean Squared Error (MSE):", mse, "\n")
+
+#rmse
+rmse <- sqrt(mse)
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+#R-squared
+rsquared <- cor(predictions, merge_2$Anxiety_disorders)^2
+cat("R-squared:", rsquared, "\n")
+```
+
+
+```{r}
+library(mgcv)
+model1 <- gam(Anxiety_disorders ~ s(log(GDP_per_capita)) + s(Year) , data = merge_2 )
+
+#summary of the model
+summary(model1)
+
+#predictions using the model
+predictions <- predict(model1, newdata = merge_2)
+
+#nse
+mse <- mean((predictions - merge_2$Anxiety_disorders)^2)
+cat("Mean Squared Error (MSE):", mse, "\n")
+
+#rmse
+rmse <- sqrt(mse)
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+#R-squared
+rsquared <- cor(predictions, merge_2$Anxiety_disorders)^2
+cat("R-squared:", rsquared, "\n")
+
+```
+```{r}
+plot(model1)
+```
+The model has a r2 of 0.26 which may seem low, but considering the variability in the predictability factors of anxiety, it seems pretty decent.
+
+modeling female anxiety
+```{r}
+model_female <- gam(Female_anxiety ~ s(log(GDP_per_capita)) + s(Year) , data = merge_2 )
+
+# Print the summary of the model
+summary(model_female)
+
+# Make predictions using the model
+predictions <- predict(model_female, newdata = merge_2)
+
+# Calculate Mean Squared Error (MSE)
+mse <- mean((predictions - merge_2$Anxiety_disorders)^2)
+cat("Mean Squared Error (MSE):", mse, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mse)
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate R-squared
+rsquared <- cor(predictions, merge_2$Anxiety_disorders)^2
+cat("R-squared:", rsquared, "\n")
+```
+
+modeling male anxiety
+```{r}
+model_male <- gam(Male_anxiety ~ s(log(GDP_per_capita)) + s(Year) , data = merge_2 )
+
+# Print the summary of the model
+summary(model_male)
+
+# Make predictions using the model
+predictions <- predict(model_male, newdata = merge_2)
+
+# Calculate Mean Squared Error (MSE)
+mse <- mean((predictions - merge_2$Anxiety_disorders)^2)
+cat("Mean Squared Error (MSE):", mse, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mse)
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate R-squared
+rsquared <- cor(predictions, merge_2$Anxiety_disorders)^2
+cat("R-squared:", rsquared, "\n")
+```
+
+Do the predicted values of male and female anxieties also have the huge gap. 
+Plot the predicted male and female anxieties wrt log gdp.
+
+```{r}
+df_pred_gam <- data.frame(
+  log_GDP = log(merge_2$GDP_per_capita),
+  Year = merge_2$Year,
+  male_fitted = predict(model_male),
+  female_fitted = predict(model_female),
+  actual_values = merge_2$Anxiety_disorders
+)
+```
+
+```{r}
+df_long_pred_gam <- df_pred_gam %>%
+  gather(key = "Gender", value = "Fitted_Value", -log_GDP, -Year, -actual_values) %>%
+  mutate(Gender = gsub("_fitted", "", Gender))
+```
+
+```{r}
+df_long_pred_gam |>
+  filter(Year == 2019) |>
+  ggplot(aes(x = log_GDP , y = Fitted_Value, color = Gender)) + 
+  #geom_line(size = 0.6) + 
+  geom_point() + 
+  geom_smooth(se = FALSE) +
+  labs(title = "Fitted Values of Male and Female Models",
+       x = "log(GDP_per_capita)",
+       y = "Fitted Values") +
+  scale_color_manual(values = cb_palette) +
+  theme_minimal()
+```
+
+The data analysis did indicate the female anxiety is much significantly larger than males.
+When we model the male and female anxieties with log gdp and year. The predicted values of the male and female anxiety yet again have a significant difference. So, modeling log gdp alongwith other factors could prove to be a better fit for predicting anxiety levels.
+
+
+
